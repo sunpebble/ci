@@ -23,6 +23,38 @@ on:
         description: Run xcodegen generate before archive
         type: boolean
         default: true
+      build_number_strategy:
+        description: run_number (default) or utc_timestamp
+        type: string
+        default: run_number
+      marketing_version_from_repo_package_json:
+        description: Read MARKETING_VERSION from repository root package.json
+        type: boolean
+        default: false
+      archive_configuration:
+        description: Optional xcodebuild -configuration (e.g. Release)
+        type: string
+        default: ""
+      export_subdirectory:
+        description: Subfolder under build/ for export (e.g. ipa). Empty exports to build/
+        type: string
+        default: ""
+      upload_ipa_path:
+        description: Repo-relative path to IPA for upload (overrides default build path)
+        type: string
+        default: ""
+      run_test_gate:
+        description: Run xcodebuild test on iPhone simulator before archive
+        type: boolean
+        default: false
+      test_scheme:
+        description: Scheme for test gate (when run_test_gate)
+        type: string
+        default: ""
+      test_only:
+        description: Optional -only-testing:Target for test gate
+        type: string
+        default: ""
 
 jobs:
   testflight:
@@ -72,16 +104,57 @@ jobs:
         if: inputs.run_xcodegen
         run: xcodegen generate
 
+      - name: Run tests (gate)
+        if: inputs.run_test_gate
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; c=[v for rt in d for v in d[rt] if v.get('isAvailable') and v['name'].startswith('iPhone')]; print(c[0]['udid'] if c else '')")
+          if [ -z "$UDID" ]; then echo 'no available iPhone simulator'; exit 1; fi
+          echo "Using simulator UDID: $UDID"
+          EXTRA=""
+          if [ -n "${{ inputs.test_only }}" ]; then EXTRA="-only-testing:${{ inputs.test_only }}"; fi
+          xcodebuild test \
+            -project "$XCODE_PROJECT" \
+            -scheme "${{ inputs.test_scheme }}" \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            $EXTRA
+
+      - name: Compute build number (UTC timestamp)
+        if: inputs.build_number_strategy == 'utc_timestamp'
+        id: bn
+        run: echo "build_number=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+
+      - name: Read marketing version from package.json
+        if: inputs.marketing_version_from_repo_package_json
+        id: ver
+        run: |
+          VERSION=$(grep '"version"' "${GITHUB_WORKSPACE}/package.json" | head -1 | sed -E 's/.*"version": "(.+)".*/\1/')
+          echo "marketing_version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Archive
         run: |
+          if [ "${{ inputs.build_number_strategy }}" = "utc_timestamp" ]; then
+            BUILD_NUMBER="${{ steps.bn.outputs.build_number }}"
+          else
+            BUILD_NUMBER="${{ github.run_number }}"
+          fi
+          CONFIG_ARGS=()
+          if [ -n "${{ inputs.archive_configuration }}" ]; then
+            CONFIG_ARGS=(-configuration "${{ inputs.archive_configuration }}" -sdk iphoneos)
+          fi
+          MV_ARGS=()
+          if [ "${{ inputs.marketing_version_from_repo_package_json }}" = "true" ]; then
+            MV_ARGS=(MARKETING_VERSION="${{ steps.ver.outputs.marketing_version }}")
+          fi
           xcodebuild archive \
             -project "$XCODE_PROJECT" \
             -scheme "$SCHEME" \
             -destination 'generic/platform=iOS' \
+            "${CONFIG_ARGS[@]}" \
             -archivePath "build/${IPA_BASENAME}.xcarchive" \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            "${MV_ARGS[@]}" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$PWD/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
             -authenticationKeyID "$ASC_KEY_ID" \
@@ -100,19 +173,40 @@ jobs:
           </dict>
           </plist>
           EOF
+          EXPORT_PATH="build"
+          if [ -n "${{ inputs.export_subdirectory }}" ]; then
+            EXPORT_PATH="build/${{ inputs.export_subdirectory }}"
+            mkdir -p "$EXPORT_PATH"
+          fi
           xcodebuild -exportArchive \
             -archivePath "build/${IPA_BASENAME}.xcarchive" \
             -exportOptionsPlist ExportOptions.plist \
-            -exportPath build \
+            -exportPath "$EXPORT_PATH" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$PWD/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
+      - name: Resolve IPA path (repo root)
+        id: ipa
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -n "${{ inputs.upload_ipa_path }}" ]; then
+            echo "path=${{ inputs.upload_ipa_path }}" >> "$GITHUB_OUTPUT"
+          else
+            WD="${{ inputs.working_directory }}"
+            if [ "$WD" = "." ]; then BASE=""; else BASE="${WD}/"; fi
+            if [ -n "${{ inputs.export_subdirectory }}" ]; then
+              echo "path=${BASE}build/${{ inputs.export_subdirectory }}/${{ inputs.ipa_basename }}.ipa" >> "$GITHUB_OUTPUT"
+            else
+              echo "path=${BASE}build/${{ inputs.ipa_basename }}.ipa" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Upload to TestFlight
         uses: apple-actions/upload-testflight-build@v5
         with:
-          app-path: build/${{ inputs.ipa_basename }}.ipa
+          app-path: ${{ steps.ipa.outputs.path }}
           issuer-id: ${{ secrets.ASC_ISSUER_ID }}
           api-key-id: ${{ secrets.ASC_KEY_ID }}
           api-private-key: ${{ secrets.ASC_API_KEY_P8 }}

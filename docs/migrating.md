@@ -13,4 +13,4 @@
 
 ## pathfinding
 
-`uses: sunpebble/ci/.github/workflows/ios-testflight-pathfinding.yml@v1.1`. Map `APPLE_DIST_*` / `APPLE_PROFILE_*` secrets explicitly (not org `DIST_CERT_*` names).
+`uses: sunpebble/ci/.github/workflows/ios-testflight.yml@v1.2` with `working_directory: apps/ios/Pathfinding`, `secrets: inherit` (org `DIST_CERT_P12` / `DIST_CERT_PASSWORD`). Release signing is Automatic in `project.yml` (same as other sunpebble iOS apps).

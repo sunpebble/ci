@@ -8,7 +8,7 @@ Shared GitHub Actions workflows for sunpebble iOS apps.
 |----------|---------|
 | `ios-testflight.yml` | Simple sunpebble apps (automatic signing, `github.run_number` build) |
 | `ios-testflight-fresh-pantry.yml` | Fresh Pantry: Secrets.plist, version.txt, simulator gate, Sentry dSYM |
-| `ios-testflight-pathfinding.yml` | Pathfinding: manual signing, preinstalled profile, altool upload |
+
 
 Call from an app repo after `release-please` creates a release:
 
@@ -40,4 +40,5 @@ See [`docs/app-matrix.json`](docs/app-matrix.json) for per-repo `scheme` / paths
 | Tag | Notes |
 |-----|-------|
 | `v1` | Initial `ios-testflight` for simple iOS apps |
-| `v1.1` | Adds `ios-testflight-fresh-pantry` and `ios-testflight-pathfinding` |
+| `v1.1` | Adds `ios-testflight-fresh-pantry` |
+| `v1.2` | Extended `ios-testflight` (test gate, package.json version); pathfinding uses org `DIST_CERT_*` |

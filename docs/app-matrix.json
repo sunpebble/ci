@@ -59,8 +59,9 @@
     "ios": {
       "working_directory": "apps/ios/Pathfinding",
       "xcode_project": "Pathfinding.xcodeproj",
-      "scheme": "Pathfinding",
-      "ipa_basename": "Pathfinding"
+      "scheme": "Pathfinding-Release",
+      "ipa_basename": "Pathfinding",
+      "ci_workflow": "ios-testflight.yml@v1.2"
     }
   }
 }
