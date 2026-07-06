@@ -1,0 +1,66 @@
+{
+  "dayroll": {
+    "repo": "sunpebble/dayroll",
+    "ios": {
+      "working_directory": ".",
+      "xcode_project": "Dayroll.xcodeproj",
+      "scheme": "Dayroll",
+      "ipa_basename": "Dayroll"
+    }
+  },
+  "simmer": {
+    "repo": "sunpebble/simmer",
+    "ios": {
+      "working_directory": ".",
+      "xcode_project": "Simmer.xcodeproj",
+      "scheme": "Simmer",
+      "ipa_basename": "Simmer"
+    }
+  },
+  "sleeptab": {
+    "repo": "sunpebble/sleeptab",
+    "ios": {
+      "working_directory": ".",
+      "xcode_project": "Sleeptab.xcodeproj",
+      "scheme": "Sleeptab",
+      "ipa_basename": "Sleeptab"
+    }
+  },
+  "steady": {
+    "repo": "sunpebble/steady",
+    "ios": {
+      "working_directory": ".",
+      "xcode_project": "Steady.xcodeproj",
+      "scheme": "Steady",
+      "ipa_basename": "Steady"
+    }
+  },
+  "cineslate": {
+    "repo": "sunpebble/cineslate",
+    "ios": {
+      "working_directory": ".",
+      "xcode_project": "Cineslate.xcodeproj",
+      "scheme": "Cineslate",
+      "ipa_basename": "Cineslate"
+    }
+  },
+  "fresh-pantry": {
+    "repo": "sunpebble/fresh-pantry",
+    "ios": {
+      "working_directory": "apps/ios",
+      "xcode_project": "FreshPantry.xcodeproj",
+      "scheme": "FreshPantry",
+      "ipa_basename": "FreshPantry",
+      "extra_secrets": ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"]
+    }
+  },
+  "pathfinding": {
+    "repo": "sunpebble/pathfinding",
+    "ios": {
+      "working_directory": "apps/ios/Pathfinding",
+      "xcode_project": "Pathfinding.xcodeproj",
+      "scheme": "Pathfinding",
+      "ipa_basename": "Pathfinding"
+    }
+  }
+}

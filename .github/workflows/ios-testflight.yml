@@ -1,0 +1,123 @@
+name: iOS TestFlight
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Repository-relative directory for xcodebuild (default repo root)
+        type: string
+        default: .
+      xcode_project:
+        description: Xcode project filename (e.g. Steady.xcodeproj)
+        required: true
+        type: string
+      scheme:
+        description: Xcode scheme to archive
+        required: true
+        type: string
+      ipa_basename:
+        description: Exported IPA basename without extension (e.g. Steady)
+        required: true
+        type: string
+      run_xcodegen:
+        description: Run xcodegen generate before archive
+        type: boolean
+        default: true
+
+jobs:
+  testflight:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      XCODE_PROJECT: ${{ inputs.xcode_project }}
+      SCHEME: ${{ inputs.scheme }}
+      IPA_BASENAME: ${{ inputs.ipa_basename }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode 26
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        if: inputs.run_xcodegen
+        run: |
+          for tap in $(brew tap); do
+            case "$tap" in homebrew/*) ;; *) brew trust "$tap" ;; esac
+          done
+          brew install xcodegen
+
+      - name: Import distribution certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.DIST_CERT_P12 }}
+          p12-password: ${{ secrets.DIST_CERT_PASSWORD }}
+
+      - name: Write App Store Connect API key
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: |
+          mkdir -p private_keys
+          printf '%s\n' "$ASC_API_KEY_P8" > "private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Generate Xcode project
+        if: inputs.run_xcodegen
+        run: xcodegen generate
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project "$XCODE_PROJECT" \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS' \
+            -archivePath "build/${IPA_BASENAME}.xcarchive" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$PWD/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Export IPA
+        run: |
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "build/${IPA_BASENAME}.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$PWD/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Upload to TestFlight
+        uses: apple-actions/upload-testflight-build@v5
+        with:
+          app-path: build/${{ inputs.ipa_basename }}.ipa
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          api-key-id: ${{ secrets.ASC_KEY_ID }}
+          api-private-key: ${{ secrets.ASC_API_KEY_P8 }}
+          wait-for-processing: "false"
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -rf private_keys ExportOptions.plist
