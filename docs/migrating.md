@@ -9,8 +9,8 @@
 
 ## fresh-pantry
 
-Not yet wired to reusable workflow only — requires `Secrets.plist` before `xcodegen`. Use composite action (future) or a dedicated `prepare` job in the app repo.
+`uses: sunpebble/ci/.github/workflows/ios-testflight-fresh-pantry.yml@v1.1` with `secrets: inherit`. Keep `quality` + `release-please` in the app repo.
 
 ## pathfinding
 
-Uses `apps/ios/Pathfinding` as `working_directory`. Align `release-please` output names when consolidating workflows.
+`uses: sunpebble/ci/.github/workflows/ios-testflight-pathfinding.yml@v1.1`. Map `APPLE_DIST_*` / `APPLE_PROFILE_*` secrets explicitly (not org `DIST_CERT_*` names).

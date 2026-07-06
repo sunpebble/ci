@@ -1,0 +1,165 @@
+name: iOS TestFlight (Fresh Pantry)
+
+on:
+  workflow_call:
+    secrets:
+      ASC_KEY_ID:
+        required: true
+      ASC_ISSUER_ID:
+        required: true
+      ASC_API_KEY_P8:
+        required: true
+      APPLE_TEAM_ID:
+        required: true
+      DIST_CERT_P12:
+        required: true
+      DIST_CERT_PASSWORD:
+        required: true
+      SUPABASE_URL:
+        required: true
+      SUPABASE_PUBLISHABLE_KEY:
+        required: true
+      SENTRY_AUTH_TOKEN:
+        required: false
+
+jobs:
+  testflight:
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: apps/ios
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
+
+      - name: Install XcodeGen
+        run: |
+          brew trust aws/tap azure/bicep || true
+          brew install xcodegen
+
+      - name: Write App Store Connect API key
+        run: |
+          mkdir -p private_keys
+          printf '%s\n' "${{ secrets.ASC_API_KEY_P8 }}" > "private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Import distribution certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.DIST_CERT_P12 }}
+          p12-password: ${{ secrets.DIST_CERT_PASSWORD }}
+
+      - name: Generate Secrets.plist from CI secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          : "${SUPABASE_URL:?SUPABASE_URL GitHub secret is required}"
+          : "${SUPABASE_PUBLISHABLE_KEY:?SUPABASE_PUBLISHABLE_KEY GitHub secret is required}"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0"><dict>' > FreshPantry/Support/Secrets.plist
+          {
+            printf '<key>SUPABASE_URL</key><string>%s</string>' "$SUPABASE_URL"
+            printf '<key>SUPABASE_PUBLISHABLE_KEY</key><string>%s</string>' "$SUPABASE_PUBLISHABLE_KEY"
+            printf '<key>SENTRY_ENVIRONMENT</key><string>production</string>'
+            printf '</dict></plist>\n'
+          } >> FreshPantry/Support/Secrets.plist
+          plutil -lint FreshPantry/Support/Secrets.plist
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project FreshPantry.xcodeproj -scheme FreshPantry
+
+      - name: Run tests (gate)
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; c=[v for rt in d for v in d[rt] if v.get('isAvailable') and v['name'].startswith('iPhone')]; print(c[0]['udid'] if c else '')")
+          if [ -z "$UDID" ]; then echo 'no available iPhone simulator'; exit 1; fi
+          echo "Using simulator UDID: $UDID"
+          xcodebuild test \
+            -project FreshPantry.xcodeproj \
+            -scheme FreshPantry \
+            -destination "platform=iOS Simulator,id=$UDID"
+
+      - name: Compute build number (UTC timestamp, monotonic)
+        id: bn
+        run: echo "build_number=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+
+      - name: Read marketing version (release-please source of truth)
+        id: ver
+        run: echo "marketing_version=$(cat version.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project FreshPantry.xcodeproj \
+            -scheme FreshPantry \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/FreshPantry.xcarchive \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION=${{ steps.ver.outputs.marketing_version }} \
+            CURRENT_PROJECT_VERSION=${{ steps.bn.outputs.build_number }} \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$PWD/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Export IPA (clean PATH avoids Homebrew GNU rsync "Copy failed")
+        run: |
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+          </dict>
+          </plist>
+          EOF
+          env PATH="/usr/bin:/bin:/usr/sbin:/sbin" xcodebuild -exportArchive \
+            -archivePath build/FreshPantry.xcarchive \
+            -exportPath build/ipa \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$PWD/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Upload to TestFlight
+        uses: apple-actions/upload-testflight-build@v5
+        with:
+          app-path: apps/ios/build/ipa/FreshPantry.ipa
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          api-key-id: ${{ secrets.ASC_KEY_ID }}
+          api-private-key: ${{ secrets.ASC_API_KEY_P8 }}
+          wait-for-processing: "false"
+
+      - name: Upload dSYMs to Sentry (non-blocking)
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        working-directory: apps/ios
+        run: |
+          npx --yes @sentry/cli@latest debug-files upload \
+            --org kunish --project fresh_pantry \
+            --include-sources \
+            build/FreshPantry.xcarchive/dSYMs
+
+      - name: Clean up credentials
+        if: always()
+        working-directory: apps/ios
+        run: rm -rf private_keys ExportOptions.plist
