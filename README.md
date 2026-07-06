@@ -9,14 +9,13 @@ Shared GitHub Actions workflows for sunpebble iOS apps.
 | `ios-testflight.yml` | Simple sunpebble apps (automatic signing, `github.run_number` build) |
 | `ios-testflight-fresh-pantry.yml` | Fresh Pantry: Secrets.plist, version.txt, simulator gate, Sentry dSYM |
 
-
 Call from an app repo after `release-please` creates a release:
 
 ```yaml
 testflight:
   needs: release-please
   if: needs.release-please.outputs.release_created == 'true'
-  uses: sunpebble/ci/.github/workflows/ios-testflight.yml@v1
+  uses: sunpebble/ci/.github/workflows/ios-testflight.yml@v2
   with:
     xcode_project: Steady.xcodeproj
     scheme: Steady
@@ -24,7 +23,7 @@ testflight:
   secrets: inherit
 ```
 
-Pin `@v1` (or newer tag). Do not use `@main` in production callers.
+Pin **`@v2`** (major tag only). Do not use `@main` or semver tags like `@v1.2`.
 
 ## App configuration
 
@@ -39,6 +38,4 @@ See [`docs/app-matrix.json`](docs/app-matrix.json) for per-repo `scheme` / paths
 
 | Tag | Notes |
 |-----|-------|
-| `v1` | Initial `ios-testflight` for simple iOS apps |
-| `v1.1` | Adds `ios-testflight-fresh-pantry` |
-| `v1.2` | Extended `ios-testflight` (test gate, package.json version); pathfinding uses org `DIST_CERT_*` |
+| `v2` | Current major: extended `ios-testflight` + `ios-testflight-fresh-pantry` |
