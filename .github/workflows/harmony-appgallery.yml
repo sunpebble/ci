@@ -50,11 +50,11 @@ on:
       sdk_release_tag:
         description: Release tag on sdk_repo that holds the CLI zip asset
         type: string
-        default: "commandline-tools-6.0.2"
+        default: "commandline-tools-6.1.1"
       cli_zip_name:
         description: Asset filename within the release (Linux x86 build of HarmonyOS Command Line Tools)
         type: string
-        default: commandline-tools-linux-x86-6.0.2.zip
+        default: commandline-tools-linux-x64-6.1.1.290.zip
 
 jobs:
   appgallery:
@@ -69,7 +69,6 @@ jobs:
       KEY_ALIAS: ${{ inputs.key_alias }}
       COMPAT_VER: ${{ inputs.compatible_version }}
       AGC_APP_ID: ${{ inputs.agc_app_id }}
-      TEMP: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v7
 
@@ -225,9 +224,9 @@ jobs:
           HARMONY_CER_BASE64: ${{ secrets.HARMONY_CER_BASE64 }}
           HARMONY_P7B_BASE64: ${{ secrets.HARMONY_P7B_BASE64 }}
         run: |
-          printf '%s' "$HARMONY_P12_BASE64" | base64 -d > "$TEMP/release.p12"
-          printf '%s' "$HARMONY_CER_BASE64"  | base64 -d > "$TEMP/release.cer"
-          printf '%s' "$HARMONY_P7B_BASE64"  | base64 -d > "$TEMP/release.p7b"
+          printf '%s' "$HARMONY_P12_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          printf '%s' "$HARMONY_CER_BASE64"  | base64 -d > "$RUNNER_TEMP/release.cer"
+          printf '%s' "$HARMONY_P7B_BASE64"  | base64 -d > "$RUNNER_TEMP/release.p7b"
           UNSIGNED="${{ steps.hap.outputs.path }}"
           SIGNED="${UNSIGNED%-unsigned.hap}-signed.hap"
           # hap-sign-tool is a jar shipped inside the SDK (openharmony/toolchains/lib/hap-sign-tool.jar).
@@ -242,11 +241,11 @@ jobs:
             -mode localSign \
             -keyAlias "$KEY_ALIAS" \
             -keyPwd "$HARMONY_P12_PASSWORD" \
-            -appCertFile "$TEMP/release.cer" \
-            -profileFile "$TEMP/release.p7b" \
+            -appCertFile "$RUNNER_TEMP/release.cer" \
+            -profileFile "$RUNNER_TEMP/release.p7b" \
             -inFile "$UNSIGNED" \
             -signAlg SHA256withECDSA \
-            -keystoreFile "$TEMP/release.p12" \
+            -keystoreFile "$RUNNER_TEMP/release.p12" \
             -keystorePwd "$HARMONY_P12_PASSWORD" \
             -outFile "$SIGNED" \
             -compatibleVersion "$COMPAT_VER" \
@@ -368,4 +367,4 @@ jobs:
 
       - name: Cleanup credentials
         if: always()
-        run: rm -f "$TEMP/release.p12" "$TEMP/release.cer" "$TEMP/release.p7b"
+        run: rm -f "$RUNNER_TEMP/release.p12" "$RUNNER_TEMP/release.cer" "$RUNNER_TEMP/release.p7b"
