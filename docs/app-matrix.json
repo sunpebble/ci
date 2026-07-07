@@ -54,6 +54,51 @@
       "extra_secrets": ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"]
     }
   },
+  "dayroll-harmony": {
+    "repo": "sunpebble/dayroll-harmony",
+    "harmony": {
+      "app_subpath": "apps/dayroll",
+      "bundle_name": "com.sunpebble.dayroll",
+      "key_alias": "harmony",
+      "agc_app_id": "6917610271904409500"
+    }
+  },
+  "homekeep-harmony": {
+    "repo": "sunpebble/homekeep-harmony",
+    "harmony": {
+      "app_subpath": "apps/homekeep",
+      "bundle_name": "com.sunpebble.homekeep",
+      "key_alias": "harmony",
+      "agc_app_id": "6917610271953858652"
+    }
+  },
+  "simmer-harmony": {
+    "repo": "sunpebble/simmer-harmony",
+    "harmony": {
+      "app_subpath": "apps/simmer",
+      "bundle_name": "com.sunpebble.simmer",
+      "key_alias": "harmony",
+      "agc_app_id": "6917610264039358139"
+    }
+  },
+  "sleeptab-harmony": {
+    "repo": "sunpebble/sleeptab-harmony",
+    "harmony": {
+      "app_subpath": "apps/sleeptab",
+      "bundle_name": "com.sunpebble.sleeptab",
+      "key_alias": "harmony",
+      "agc_app_id": "6917610267988202733"
+    }
+  },
+  "steady-harmony": {
+    "repo": "sunpebble/steady-harmony",
+    "harmony": {
+      "app_subpath": "apps/steady",
+      "bundle_name": "com.sunpebble.steady",
+      "key_alias": "harmony",
+      "agc_app_id": "6917610271813691310"
+    }
+  },
   "pathfinding": {
     "repo": "sunpebble/pathfinding",
     "ios": {

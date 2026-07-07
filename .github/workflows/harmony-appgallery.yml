@@ -1,0 +1,371 @@
+name: HarmonyOS AppGallery
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Repository-relative root (default repo root)
+        type: string
+        default: "."
+      app_subpath:
+        description: Path under working_directory to the DevEco app module (contains hvigorw, AppScope/app.json5)
+        required: true
+        type: string
+      bundle_name:
+        description: app.bundleName, used for sanity check against app.json5
+        required: true
+        type: string
+      module:
+        description: Entry module name that produces the .hap (hvigor emits <module>/build/default/outputs/default/<module>-default-unsigned.hap)
+        type: string
+        default: entry
+      key_alias:
+        description: Key alias inside the distribution keystore (matches the -keyAlias used at keystore generation)
+        required: true
+        type: string
+      compatible_version:
+        description: Minimum API version the signed hap can run on (passed to hap-sign-tool -compatibleVersion)
+        type: string
+        default: "23"
+      submit_for_review:
+        description: If false, upload only and stop before the submit-phase call
+        type: boolean
+        default: true
+      agc_app_id:
+        description: AppGallery Connect numeric app id (not secret)
+        required: true
+        type: string
+      version:
+        description: Semver from release-please (e.g. 0.1.1). If empty, versionName is read from app.json5.
+        type: string
+        default: ""
+      sdk_api_level:
+        description: HarmonyOS API level to install via sdkmgr (e.g. 12 for NEXT 5.0)
+        type: string
+        default: "12"
+      sdk_repo:
+        description: "owner/repo hosting the re-hosted Command Line Tools release asset (see ci/README.md)"
+        type: string
+        default: sunpebble/harmonyos-sdk
+      sdk_release_tag:
+        description: Release tag on sdk_repo that holds the CLI zip asset
+        type: string
+        default: "commandline-tools-6.0.2"
+      cli_zip_name:
+        description: Asset filename within the release (Linux x86 build of HarmonyOS Command Line Tools)
+        type: string
+        default: commandline-tools-linux-x86-6.0.2.zip
+
+jobs:
+  appgallery:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    env:
+      APP_SUBPATH: ${{ inputs.app_subpath }}
+      BUNDLE_NAME: ${{ inputs.bundle_name }}
+      MODULE: ${{ inputs.module }}
+      KEY_ALIAS: ${{ inputs.key_alias }}
+      COMPAT_VER: ${{ inputs.compatible_version }}
+      AGC_APP_ID: ${{ inputs.agc_app_id }}
+      TEMP: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # ---------------------------------------------------------------------------
+      # HarmonyOS toolchain (Option A: re-hosted Command Line Tools).
+      # Huawei's Command Line Tools bundle sdkmgr + ohpm + hvigor + hap-sign-tool
+      # but sit behind a login wall, so we re-host the Linux zip on a private
+      # sunpebble release and download it here. One-time setup: see ci/README.md
+      # "HarmonyOS SDK one-time setup".
+      # ---------------------------------------------------------------------------
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Restore HarmonyOS toolchain cache
+        id: hmos
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/command-line-tools
+            ${{ runner.temp }}/hwsdk
+          key: hmos-${{ inputs.sdk_release_tag }}-${{ inputs.sdk_api_level }}-${{ runner.os }}
+
+      - name: Download & install HarmonyOS toolchain
+        if: steps.hmos.outputs.cache-hit != 'true'
+        env:
+          SDK_TOKEN: ${{ secrets.SDK_DOWNLOAD_TOKEN }}
+          SDK_REPO: ${{ inputs.sdk_repo }}
+          SDK_TAG: ${{ inputs.sdk_release_tag }}
+          CLI_ZIP: ${{ inputs.cli_zip_name }}
+          API_LEVEL: ${{ inputs.sdk_api_level }}
+        run: |
+          if [ -z "$SDK_TOKEN" ]; then
+            echo "::error::secret SDK_DOWNLOAD_TOKEN is empty. Create a PAT with read access on $SDK_REPO and add it as a repo/org secret. See ci/README.md."
+            exit 1
+          fi
+          ASSET_API_URL=$(curl -sSL -H "Authorization: token $SDK_TOKEN" \
+            "https://api.github.com/repos/$SDK_REPO/releases/tags/$SDK_TAG" \
+            | jq -r ".assets[] | select(.name==\"$CLI_ZIP\") | .url")
+          if [ -z "$ASSET_API_URL" ] || [ "$ASSET_API_URL" = "null" ]; then
+            echo "::error::asset $CLI_ZIP not found in $SDK_REPO@$SDK_TAG. Upload it first (see ci/README.md one-time setup)."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/cli-dl"
+          curl -sSL -H "Authorization: token $SDK_TOKEN" \
+               -H "Accept: application/octet-stream" \
+               -o "$RUNNER_TEMP/cli-dl/cli.zip" "$ASSET_API_URL"
+          unzip -q "$RUNNER_TEMP/cli-dl/cli.zip" -d "$RUNNER_TEMP"
+          # CLI layout differs across versions: NEXT uses command-line-tools/bin/sdkmgr,
+          # older builds use command-line-tools/sdkmanager/bin/sdkmgr.
+          if   [ -x "$RUNNER_TEMP/command-line-tools/bin/sdkmgr" ]; then SDKMGR="$RUNNER_TEMP/command-line-tools/bin/sdkmgr"
+          elif [ -x "$RUNNER_TEMP/command-line-tools/sdkmanager/bin/sdkmgr" ]; then SDKMGR="$RUNNER_TEMP/command-line-tools/sdkmanager/bin/sdkmgr"
+          else echo "::error::sdkmgr not found after unzip; inspect $RUNNER_TEMP"; ls -R "$RUNNER_TEMP" | head -50; exit 1
+          fi
+          # Region workaround: sdkmgr's getSdkList call hangs without -Duser.country=CN.
+          export JAVA_TOOL_OPTIONS="-Duser.country=CN"
+          "$SDKMGR" install "toolchains:$API_LEVEL" "OpenHarmony/toolchains:$API_LEVEL" --accept-license --no-progress
+          # Verify the signing tool landed where later steps expect it.
+          # TODO(verify-on-first-run): hap-sign-tool.jar path may be hwsdk/<api>/toolchains/ or .../openharmony/toolchains/.
+          find "$RUNNER_TEMP/hwsdk" -name 'hap-sign-tool.jar' -o -name 'hapsigner*.jar' 2>/dev/null || echo "WARN: hap-sign-tool not found; signing step will need adjustment"
+
+      - name: Expose HarmonyOS environment
+        run: |
+          echo "OHOS_SDK_HOME=${RUNNER_TEMP}/hwsdk" >> "$GITHUB_ENV"
+          echo "${RUNNER_TEMP}/command-line-tools/bin"   >> "$GITHUB_PATH"
+          echo "${RUNNER_TEMP}/command-line-tools/ohpm/bin" >> "$GITHUB_PATH"
+          echo "JAVA_TOOL_OPTIONS=-Duser.country=CN" >> "$GITHUB_ENV"
+
+      - name: Restore ohpm cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ohpm
+            ${{ inputs.app_subpath }}/**/oh_modules
+          key: ohpm-${{ runner.os }}-${{ hashFiles(format('{0}/**/oh-package-lock.json5', inputs.app_subpath)) }}
+          restore-keys: |
+            ohpm-${{ runner.os }}-
+
+      - name: Resolve version and versionCode
+        id: ver
+        run: |
+          APP_JSON5="${APP_SUBPATH}/AppScope/app.json5"
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION=$(grep '"versionName"' "$APP_JSON5" | head -1 | sed -E 's/.*"versionName":[[:space:]]*"([^"]+)".*/\1/')
+          fi
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::could not resolve a valid semver (got '$VERSION'); pass inputs.version from release-please"
+            exit 1
+          fi
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+          VERSION_CODE=$(( MAJOR * 1000000 + MINOR * 1000 + PATCH ))
+          echo "Resolved versionName=$VERSION versionCode=$VERSION_CODE"
+          echo "version=$VERSION"        >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Write version into app.json5
+        run: |
+          APP_JSON5="${APP_SUBPATH}/AppScope/app.json5"
+          CURRENT_BUNDLE=$(grep '"bundleName"' "$APP_JSON5" | head -1 | sed -E 's/.*"bundleName":[[:space:]]*"([^"]+)".*/\1/')
+          if [ "$CURRENT_BUNDLE" != "$BUNDLE_NAME" ]; then
+            echo "::error::bundleName mismatch: app.json5 has '$CURRENT_BUNDLE', input expected '$BUNDLE_NAME'"
+            exit 1
+          fi
+          sed -i -E "s/\"versionCode\":[[:space:]]*[0-9]+/\"versionCode\": ${{ steps.ver.outputs.version_code }}/" "$APP_JSON5"
+          sed -i -E "s/\"versionName\":[[:space:]]*\"[^\"]+\"/\"versionName\": \"${{ steps.ver.outputs.version }}\"/" "$APP_JSON5"
+          grep -E '"(versionCode|versionName|bundleName)"' "$APP_JSON5"
+
+      - name: Install hvigor and ohpm dependencies
+        run: |
+          npm config set @ohos:registry=https://repo.harmonyos.com/npm/
+          npm install
+          ohpm install --all
+        working-directory: ${{ inputs.working_directory }}/${{ inputs.app_subpath }}
+
+      - name: Build .hap
+        run: |
+          npx hvigor assembleHap \
+            --mode module \
+            -p product=default \
+            -p buildMode=release \
+            --no-daemon
+        working-directory: ${{ inputs.working_directory }}/${{ inputs.app_subpath }}
+
+      - name: Resolve built .hap path
+        id: hap
+        run: |
+          OUT_DIR="${APP_SUBPATH}/${MODULE}/build/default/outputs/default"
+          HAP="${OUT_DIR}/${MODULE}-default-unsigned.hap"
+          if [ ! -f "$HAP" ]; then
+            echo "::error::expected unsigned hap at $HAP; falling back to glob:"
+            find "${APP_SUBPATH}" -name '*-default-unsigned.hap' 2>/dev/null || true
+            exit 1
+          fi
+          echo "path=$HAP" >> "$GITHUB_OUTPUT"
+          echo "Built unsigned .hap at: $HAP"
+
+      - name: Sign .hap
+        id: sign
+        env:
+          HARMONY_P12_BASE64: ${{ secrets.HARMONY_P12_BASE64 }}
+          HARMONY_P12_PASSWORD: ${{ secrets.HARMONY_P12_PASSWORD }}
+          HARMONY_CER_BASE64: ${{ secrets.HARMONY_CER_BASE64 }}
+          HARMONY_P7B_BASE64: ${{ secrets.HARMONY_P7B_BASE64 }}
+        run: |
+          printf '%s' "$HARMONY_P12_BASE64" | base64 -d > "$TEMP/release.p12"
+          printf '%s' "$HARMONY_CER_BASE64"  | base64 -d > "$TEMP/release.cer"
+          printf '%s' "$HARMONY_P7B_BASE64"  | base64 -d > "$TEMP/release.p7b"
+          UNSIGNED="${{ steps.hap.outputs.path }}"
+          SIGNED="${UNSIGNED%-unsigned.hap}-signed.hap"
+          # hap-sign-tool is a jar shipped inside the SDK (openharmony/toolchains/lib/hap-sign-tool.jar).
+          SIGN_JAR=$(find "$OHOS_SDK_HOME" -name 'hap-sign-tool.jar' 2>/dev/null | head -1)
+          if [ -z "$SIGN_JAR" ]; then
+            echo "::error::hap-sign-tool.jar not found under $OHOS_SDK_HOME"
+            exit 1
+          fi
+          # Interface + params validated locally with real AGC material:
+          # localSign, SHA256withECDSA, -compatibleVersion 23, -signCode 1.
+          java -jar "$SIGN_JAR" sign-app \
+            -mode localSign \
+            -keyAlias "$KEY_ALIAS" \
+            -keyPwd "$HARMONY_P12_PASSWORD" \
+            -appCertFile "$TEMP/release.cer" \
+            -profileFile "$TEMP/release.p7b" \
+            -inFile "$UNSIGNED" \
+            -signAlg SHA256withECDSA \
+            -keystoreFile "$TEMP/release.p12" \
+            -keystorePwd "$HARMONY_P12_PASSWORD" \
+            -outFile "$SIGNED" \
+            -compatibleVersion "$COMPAT_VER" \
+            -signCode 1
+          echo "signed_path=$SIGNED" >> "$GITHUB_OUTPUT"
+          echo "Signed .hap at: $SIGNED"
+
+      # ---------------------------------------------------------------------------
+      # AGC Publishing API. Endpoints below follow the documented flow but MUST
+      # be verified against current AppGallery Connect Publishing API docs:
+      # https://developer.huawei.com/consumer/en/agconnect/
+      # Each TODO marks a spot that needs a live check during first manual run.
+      # ---------------------------------------------------------------------------
+      # ---------------------------------------------------------------------------
+      # AGC Publishing API auth (validated).
+      # Uses a TEAM-LEVEL (项目=N/A) API client: client_credentials grant → token.
+      # Project-level clients get HTTP 403 on /publish/v2/*. Service Account JWT
+      # is an alternative but the client_credentials flow is simpler and works.
+      # ---------------------------------------------------------------------------
+      - name: AGC get access token
+        id: token
+        env:
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+        run: |
+          RESPONSE=$(curl -s -X POST "https://connect-api.cloud.huawei.com/api/oauth2/v1/token" \
+            -H "Content-Type: application/json" \
+            -d "{\"grant_type\":\"client_credentials\",\"client_id\":\"$AGC_CLIENT_ID\",\"client_secret\":\"$AGC_CLIENT_SECRET\"}")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "::error::failed to obtain AGC access token: $RESPONSE"
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: AGC get upload URL
+        id: upload
+        env:
+          AGC_TOKEN: ${{ steps.token.outputs.token }}
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+        run: |
+          # Validated: publish endpoints need BOTH the Bearer token AND a
+          # client_id header. suffix is the file extension (hap), not the build
+          # mode. AGC_CLIENT_ID must come from a TEAM-LEVEL (项目=N/A) API
+          # client — project-level clients get HTTP 403 on /publish/v2/*.
+          RESPONSE=$(curl -s -X GET "https://connect-api.cloud.huawei.com/api/publish/v2/upload-url" \
+            -H "Authorization: Bearer $AGC_TOKEN" \
+            -H "client_id: $AGC_CLIENT_ID" \
+            -G --data-urlencode "appId=$AGC_APP_ID" --data-urlencode "suffix=hap")
+          UPLOAD_URL=$(echo "$RESPONSE" | jq -r '.uploadUrl // empty')
+          AUTH_CODE=$(echo "$RESPONSE" | jq -r '.authCode // empty')
+          if [ -z "$UPLOAD_URL" ] || [ -z "$AUTH_CODE" ]; then
+            echo "::error::no upload URL/authCode: $RESPONSE"
+            echo "::error::'get file authCode failed' means the app has no draft release yet — create the first release in the AGC console (open-question-3)."
+            exit 1
+          fi
+          echo "::add-mask::$UPLOAD_URL"
+          echo "url=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
+          echo "auth=$AUTH_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: AGC upload .hap
+        id: uploadfile
+        env:
+          UPLOAD_URL: ${{ steps.upload.outputs.url }}
+          AUTH_CODE: ${{ steps.upload.outputs.auth }}
+        run: |
+          SIGNED_HAP="${{ steps.sign.outputs.signed_path }}"
+          # multipart POST to uploadUrl with file + authCode + fileCount (not PUT).
+          RESPONSE=$(curl -s --location "$UPLOAD_URL" \
+            --form "file=@$SIGNED_HAP" \
+            --form "authCode=$AUTH_CODE" \
+            --form "fileCount=1")
+          echo "Upload response: $RESPONSE"
+          DEST_URL=$(echo "$RESPONSE" | jq -r '.result.UploadFileRsp.fileInfoList[0].fileDestUlr // empty')
+          IF_OK=$(echo "$RESPONSE" | jq -r '.result.UploadFileRsp.ifSuccess // empty')
+          if [ "$IF_OK" != "1" ] || [ -z "$DEST_URL" ]; then
+            echo "::error::upload failed: $RESPONSE"
+            exit 1
+          fi
+          echo "::add-mask::$DEST_URL"
+          echo "dest_url=$DEST_URL" >> "$GITHUB_OUTPUT"
+          echo "filename=$(basename "$SIGNED_HAP")" >> "$GITHUB_OUTPUT"
+
+      - name: AGC attach file to draft release
+        env:
+          AGC_TOKEN: ${{ steps.token.outputs.token }}
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+        run: |
+          # PUT app-file-info to bind the uploaded file to the app's draft version.
+          # TODO(verify-on-first-run): fileType=5 is for app packages; confirm
+          # the exact value for HarmonyOS hap, and the fileDestUlr key spelling
+          # (AGC returns it with a known typo 'Ulr').
+          RESPONSE=$(curl -s --location --request PUT \
+            "https://connect-api.cloud.huawei.com/api/publish/v2/app-file-info?appId=$AGC_APP_ID" \
+            --header "client_id: $AGC_CLIENT_ID" \
+            --header "Authorization: Bearer $AGC_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "{
+              \"fileType\": 5,
+              \"files\": {
+                \"fileName\": \"${{ steps.uploadfile.outputs.filename }}\",
+                \"fileDestUrl\": \"${{ steps.uploadfile.outputs.dest_url }}\"
+              }
+            }")
+          echo "app-file-info response: $RESPONSE"
+
+      # ---------------------------------------------------------------------------
+      # TODO(open-question-3): AGC submit-for-review.
+      # Validated up to file upload. Submit requires a draft release to exist,
+      # which must be created in the AGC console the first time. Once a draft
+      # exists and the above upload+attach steps run, wire the submit call here.
+      # ---------------------------------------------------------------------------
+      - name: AGC submit for review
+        if: ${{ inputs.submit_for_review }}
+        run: |
+          echo "::error::submit-for-review not wired (open-question-3). Do the first release via the AGC console; wire the submit call here once the draft-release flow is exercised."
+          exit 1
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f "$TEMP/release.p12" "$TEMP/release.cer" "$TEMP/release.p7b"
