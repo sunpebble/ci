@@ -31,6 +31,13 @@ on:
         description: If false, upload only and stop before the submit-phase call
         type: boolean
         default: true
+      agc_upload:
+        description: >-
+          If false, stop after signing + attaching the hap to the GitHub
+          release (AGC refuses API upload until an app's first release is
+          published via the console — set false until then)
+        type: boolean
+        default: true
       agc_app_id:
         description: AppGallery Connect numeric app id (not secret)
         required: true
@@ -245,6 +252,16 @@ jobs:
           echo "signed_path=$SIGNED" >> "$GITHUB_OUTPUT"
           echo "Signed .hap at: $SIGNED"
 
+      - name: Attach signed .hap to GitHub release
+        if: inputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT="$RUNNER_TEMP/${BUNDLE_NAME}-${{ steps.ver.outputs.version }}-signed.hap"
+          cp "${{ steps.sign.outputs.signed_path }}" "$OUT"
+          gh release upload "v${{ steps.ver.outputs.version }}" "$OUT" --clobber -R "$GITHUB_REPOSITORY"
+          echo "Attached $(basename "$OUT") to release v${{ steps.ver.outputs.version }}"
+
       # ---------------------------------------------------------------------------
       # AGC Publishing API. Endpoints below follow the documented flow but MUST
       # be verified against current AppGallery Connect Publishing API docs:
@@ -258,6 +275,7 @@ jobs:
       # is an alternative but the client_credentials flow is simpler and works.
       # ---------------------------------------------------------------------------
       - name: AGC get access token
+        if: ${{ inputs.agc_upload }}
         id: token
         env:
           AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
@@ -275,6 +293,7 @@ jobs:
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: AGC get upload URL
+        if: ${{ inputs.agc_upload }}
         id: upload
         env:
           AGC_TOKEN: ${{ steps.token.outputs.token }}
@@ -300,6 +319,7 @@ jobs:
           echo "auth=$AUTH_CODE" >> "$GITHUB_OUTPUT"
 
       - name: AGC upload .hap
+        if: ${{ inputs.agc_upload }}
         id: uploadfile
         env:
           UPLOAD_URL: ${{ steps.upload.outputs.url }}
@@ -323,6 +343,7 @@ jobs:
           echo "filename=$(basename "$SIGNED_HAP")" >> "$GITHUB_OUTPUT"
 
       - name: AGC attach file to draft release
+        if: ${{ inputs.agc_upload }}
         env:
           AGC_TOKEN: ${{ steps.token.outputs.token }}
           AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
@@ -352,7 +373,7 @@ jobs:
       # exists and the above upload+attach steps run, wire the submit call here.
       # ---------------------------------------------------------------------------
       - name: AGC submit for review
-        if: ${{ inputs.submit_for_review }}
+        if: ${{ inputs.agc_upload && inputs.submit_for_review }}
         run: |
           echo "::error::submit-for-review not wired (open-question-3). Do the first release via the AGC console; wire the submit call here once the draft-release flow is exercised."
           exit 1
