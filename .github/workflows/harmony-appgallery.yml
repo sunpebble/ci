@@ -278,9 +278,13 @@ jobs:
         env:
           HARMONY_P12_PASSWORD: ${{ secrets.HARMONY_P12_PASSWORD }}
         run: |
-          OUT_DIR="${APP_SUBPATH}/build/outputs/default"
-          UNSIGNED_APP=$(ls "$OUT_DIR"/*-default-unsigned.app | head -1)
-          [ -n "$UNSIGNED_APP" ] || { echo "::error::no unsigned .app under $OUT_DIR"; exit 1; }
+          UNSIGNED_APP=$(find "$APP_SUBPATH" -name '*-unsigned.app' -o -name '*.app' 2>/dev/null | head -1)
+          if [ -z "$UNSIGNED_APP" ]; then
+            echo "::error::no .app produced by assembleApp; build tree follows"
+            find "$APP_SUBPATH" -maxdepth 4 -type d -name outputs -exec find {} -type f \; 2>/dev/null | head -30
+            exit 1
+          fi
+          echo "Using container: $UNSIGNED_APP"
           WORK="$RUNNER_TEMP/appwork"; mkdir -p "$WORK"
           cp "${{ steps.sign.outputs.signed_path }}" "$WORK/entry-default.hap"
           cp "$UNSIGNED_APP" "$WORK/store.app"
