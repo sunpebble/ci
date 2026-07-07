@@ -312,7 +312,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          OUT="$RUNNER_TEMP/${BUNDLE_NAME}-${{ steps.ver.outputs.version }}-signed.app"
+          # GitHub 拒绝 .app 后缀的 release 资产，用 .app.zip 命名（内容即 .app，下载后重命名）
+          OUT="$RUNNER_TEMP/${BUNDLE_NAME}-${{ steps.ver.outputs.version }}-signed.app.zip"
           cp "${{ steps.signapp.outputs.path }}" "$OUT"
           gh release upload "v${{ steps.ver.outputs.version }}" "$OUT" --clobber -R "$GITHUB_REPOSITORY"
           echo "Attached $(basename "$OUT") to release v${{ steps.ver.outputs.version }}"
