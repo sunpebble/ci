@@ -249,6 +249,8 @@ jobs:
             -outFile "$SIGNED" \
             -compatibleVersion "$COMPAT_VER" \
             -signCode 1
+          # assembleApp 的项目级重建会清掉模块输出，先把签名 hap 备份出来
+          cp "$SIGNED" "$RUNNER_TEMP/entry-default-signed.hap"
           echo "signed_path=$SIGNED" >> "$GITHUB_OUTPUT"
           echo "Signed .hap at: $SIGNED"
 
@@ -286,7 +288,7 @@ jobs:
           fi
           echo "Using container: $UNSIGNED_APP"
           WORK="$RUNNER_TEMP/appwork"; mkdir -p "$WORK"
-          cp "${{ steps.sign.outputs.signed_path }}" "$WORK/entry-default.hap"
+          cp "$RUNNER_TEMP/entry-default-signed.hap" "$WORK/entry-default.hap"
           cp "$UNSIGNED_APP" "$WORK/store.app"
           (cd "$WORK" && zip -q store.app entry-default.hap)
           SIGN_JAR=$(find "$OHOS_SDK_HOME" -name 'hap-sign-tool.jar' 2>/dev/null | head -1)
