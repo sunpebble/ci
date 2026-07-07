@@ -94,19 +94,16 @@ jobs:
         id: hmos
         uses: actions/cache@v4
         with:
-          path: |
-            ${{ runner.temp }}/command-line-tools
-            ${{ runner.temp }}/hwsdk
-          key: hmos-${{ inputs.sdk_release_tag }}-${{ inputs.sdk_api_level }}-${{ runner.os }}
+          path: ${{ runner.temp }}/command-line-tools
+          key: hmos-${{ inputs.sdk_release_tag }}-${{ runner.os }}
 
-      - name: Download & install HarmonyOS toolchain
+      - name: Download HarmonyOS toolchain
         if: steps.hmos.outputs.cache-hit != 'true'
         env:
           SDK_TOKEN: ${{ secrets.SDK_DOWNLOAD_TOKEN }}
           SDK_REPO: ${{ inputs.sdk_repo }}
           SDK_TAG: ${{ inputs.sdk_release_tag }}
           CLI_ZIP: ${{ inputs.cli_zip_name }}
-          API_LEVEL: ${{ inputs.sdk_api_level }}
         run: |
           if [ -z "$SDK_TOKEN" ]; then
             echo "::error::secret SDK_DOWNLOAD_TOKEN is empty. Create a PAT with read access on $SDK_REPO and add it as a repo/org secret. See ci/README.md."
@@ -124,24 +121,18 @@ jobs:
                -H "Accept: application/octet-stream" \
                -o "$RUNNER_TEMP/cli-dl/cli.zip" "$ASSET_API_URL"
           unzip -q "$RUNNER_TEMP/cli-dl/cli.zip" -d "$RUNNER_TEMP"
-          # CLI layout differs across versions: NEXT uses command-line-tools/bin/sdkmgr,
-          # older builds use command-line-tools/sdkmanager/bin/sdkmgr.
-          if   [ -x "$RUNNER_TEMP/command-line-tools/bin/sdkmgr" ]; then SDKMGR="$RUNNER_TEMP/command-line-tools/bin/sdkmgr"
-          elif [ -x "$RUNNER_TEMP/command-line-tools/sdkmanager/bin/sdkmgr" ]; then SDKMGR="$RUNNER_TEMP/command-line-tools/sdkmanager/bin/sdkmgr"
-          else echo "::error::sdkmgr not found after unzip; inspect $RUNNER_TEMP"; ls -R "$RUNNER_TEMP" | head -50; exit 1
-          fi
-          # Region workaround: sdkmgr's getSdkList call hangs without -Duser.country=CN.
-          export JAVA_TOOL_OPTIONS="-Duser.country=CN"
-          "$SDKMGR" install "toolchains:$API_LEVEL" "OpenHarmony/toolchains:$API_LEVEL" --accept-license --no-progress
-          # Verify the signing tool landed where later steps expect it.
-          # TODO(verify-on-first-run): hap-sign-tool.jar path may be hwsdk/<api>/toolchains/ or .../openharmony/toolchains/.
-          find "$RUNNER_TEMP/hwsdk" -name 'hap-sign-tool.jar' -o -name 'hapsigner*.jar' 2>/dev/null || echo "WARN: hap-sign-tool not found; signing step will need adjustment"
+          rm -rf "$RUNNER_TEMP/cli-dl"
+          # CLI 6.1.x is self-contained: bundles bin/{hvigorw,ohpm} plus the full
+          # SDK at sdk/default (incl. openharmony/toolchains/lib/hap-sign-tool.jar).
+          # No sdkmgr step needed (6.1.x ships none).
+          [ -x "$RUNNER_TEMP/command-line-tools/bin/hvigorw" ] || { echo "::error::bin/hvigorw not found after unzip"; ls "$RUNNER_TEMP/command-line-tools" | head -20; exit 1; }
+          [ -f "$RUNNER_TEMP/command-line-tools/sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar" ] || { echo "::error::hap-sign-tool.jar not at expected path"; exit 1; }
 
       - name: Expose HarmonyOS environment
         run: |
-          echo "OHOS_SDK_HOME=${RUNNER_TEMP}/hwsdk" >> "$GITHUB_ENV"
-          echo "${RUNNER_TEMP}/command-line-tools/bin"   >> "$GITHUB_PATH"
-          echo "${RUNNER_TEMP}/command-line-tools/ohpm/bin" >> "$GITHUB_PATH"
+          echo "OHOS_SDK_HOME=${RUNNER_TEMP}/command-line-tools/sdk" >> "$GITHUB_ENV"
+          echo "DEVECO_SDK_HOME=${RUNNER_TEMP}/command-line-tools/sdk" >> "$GITHUB_ENV"
+          echo "${RUNNER_TEMP}/command-line-tools/bin" >> "$GITHUB_PATH"
           echo "JAVA_TOOL_OPTIONS=-Duser.country=CN" >> "$GITHUB_ENV"
 
       - name: Restore ohpm cache
@@ -187,16 +178,17 @@ jobs:
           sed -i -E "s/\"versionName\":[[:space:]]*\"[^\"]+\"/\"versionName\": \"${{ steps.ver.outputs.version }}\"/" "$APP_JSON5"
           grep -E '"(versionCode|versionName|bundleName)"' "$APP_JSON5"
 
-      - name: Install hvigor and ohpm dependencies
+      - name: Install ohpm dependencies
         run: |
           npm config set @ohos:registry=https://repo.harmonyos.com/npm/
-          npm install
           ohpm install --all
         working-directory: ${{ inputs.working_directory }}/${{ inputs.app_subpath }}
 
+      # CLI hvigorw bootstraps the project-declared hvigor version itself
+      # (hvigor/hvigor-config.json5) — same flow as the validated local build.
       - name: Build .hap
         run: |
-          npx hvigor assembleHap \
+          hvigorw assembleHap \
             --mode module \
             -p product=default \
             -p buildMode=release \
