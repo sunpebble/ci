@@ -12,4 +12,4 @@
 
 ## pathfinding
 
-`uses: sunpebble/ci/.github/workflows/ios-testflight.yml@v2` with `working_directory: apps/ios/Pathfinding`, `secrets: inherit` (org `ASC_*`, `DIST_CERT_*`, `APPLE_TEAM_ID`). No per-repo provisioning profile secret; ASC API key drives automatic signing.
+Same pattern as fresh-pantry: `uses: sunpebble/ci/.github/workflows/ios-testflight-pathfinding.yml@v2` with `secrets: inherit`. Keep `quality` + `release-please` in the app repo. Release signing is Automatic in `project.yml` (no `APPLE_PROFILE_*` secret).

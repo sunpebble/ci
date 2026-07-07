@@ -61,7 +61,7 @@
       "xcode_project": "Pathfinding.xcodeproj",
       "scheme": "Pathfinding-Release",
       "ipa_basename": "Pathfinding",
-      "ci_workflow": "ios-testflight.yml@v2"
+      "ci_workflow": "ios-testflight-pathfinding.yml@v2"
     }
   }
 }

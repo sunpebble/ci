@@ -8,6 +8,7 @@ Shared GitHub Actions workflows for sunpebble iOS apps.
 |----------|---------|
 | `ios-testflight.yml` | Simple sunpebble apps (automatic signing, `github.run_number` build) |
 | `ios-testflight-fresh-pantry.yml` | Fresh Pantry: Secrets.plist, version.txt, simulator gate, Sentry dSYM |
+| `ios-testflight-pathfinding.yml` | Pathfinding: package.json version, Pathfinding-Release, ASC automatic signing |
 
 Call from an app repo after `release-please` creates a release:
 
