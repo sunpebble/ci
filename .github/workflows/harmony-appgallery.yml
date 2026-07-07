@@ -262,6 +262,55 @@ jobs:
           gh release upload "v${{ steps.ver.outputs.version }}" "$OUT" --clobber -R "$GITHUB_REPOSITORY"
           echo "Attached $(basename "$OUT") to release v${{ steps.ver.outputs.version }}"
 
+      # 应用市场"软件包管理"只收整体签名的 .app：容器(pack.info+pac.json)来自
+      # assembleApp，替换入已签名 hap 后再对 .app 整体签名。
+      - name: Build store .app container
+        run: |
+          hvigorw assembleApp \
+            --mode project \
+            -p product=default \
+            -p buildMode=release \
+            --no-daemon
+        working-directory: ${{ inputs.working_directory }}/${{ inputs.app_subpath }}
+
+      - name: Sign store .app
+        id: signapp
+        env:
+          HARMONY_P12_PASSWORD: ${{ secrets.HARMONY_P12_PASSWORD }}
+        run: |
+          OUT_DIR="${APP_SUBPATH}/build/outputs/default"
+          UNSIGNED_APP=$(ls "$OUT_DIR"/*-default-unsigned.app | head -1)
+          [ -n "$UNSIGNED_APP" ] || { echo "::error::no unsigned .app under $OUT_DIR"; exit 1; }
+          WORK="$RUNNER_TEMP/appwork"; mkdir -p "$WORK"
+          cp "${{ steps.sign.outputs.signed_path }}" "$WORK/entry-default.hap"
+          cp "$UNSIGNED_APP" "$WORK/store.app"
+          (cd "$WORK" && zip -q store.app entry-default.hap)
+          SIGN_JAR=$(find "$OHOS_SDK_HOME" -name 'hap-sign-tool.jar' 2>/dev/null | head -1)
+          java -jar "$SIGN_JAR" sign-app \
+            -mode localSign \
+            -keyAlias "$KEY_ALIAS" \
+            -keyPwd "$HARMONY_P12_PASSWORD" \
+            -appCertFile "$RUNNER_TEMP/release.cer" \
+            -profileFile "$RUNNER_TEMP/release.p7b" \
+            -inFile "$WORK/store.app" \
+            -signAlg SHA256withECDSA \
+            -keystoreFile "$RUNNER_TEMP/release.p12" \
+            -keystorePwd "$HARMONY_P12_PASSWORD" \
+            -outFile "$WORK/store-signed.app" \
+            -compatibleVersion "$COMPAT_VER" \
+            -signCode 1
+          echo "path=$WORK/store-signed.app" >> "$GITHUB_OUTPUT"
+
+      - name: Attach signed .app to GitHub release
+        if: inputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT="$RUNNER_TEMP/${BUNDLE_NAME}-${{ steps.ver.outputs.version }}-signed.app"
+          cp "${{ steps.signapp.outputs.path }}" "$OUT"
+          gh release upload "v${{ steps.ver.outputs.version }}" "$OUT" --clobber -R "$GITHUB_REPOSITORY"
+          echo "Attached $(basename "$OUT") to release v${{ steps.ver.outputs.version }}"
+
       # ---------------------------------------------------------------------------
       # AGC Publishing API. Endpoints below follow the documented flow but MUST
       # be verified against current AppGallery Connect Publishing API docs:
